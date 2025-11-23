@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import numpy as np
 import pandas as pd
-import cvxpy as cp
+from scipy.optimize import minimize
 import re, json
 
 app = FastAPI(title="Qfolio Portfolio Solver API", version="1.0.0")
@@ -65,48 +65,82 @@ def mock_llm_call(intent):
 # Translate LLM strategy → Optimization problem (Stage 4)
 # -------------------------------------------------------
 def translate_strategy(strategy):
+    """Convert strategy to scipy.optimize constraints and objective"""
     objective_type = strategy["objective"]
     cons = strategy["constraints"]
-
-    w = cp.Variable(N)
-    variance = cp.quad_form(w, SIGMA_NP)
-
-    constraints = [
-        cp.sum(w) == 1,
-        w >= 0,
-        w <= cons.get("max_single_asset_weight", 1.0)
-    ]
-
+    
+    # Build constraints list for scipy.optimize
+    constraints_list = []
+    
+    # Constraint: sum of weights = 1
+    constraints_list.append({
+        'type': 'eq',
+        'fun': lambda w: np.sum(w) - 1.0
+    })
+    
+    # Constraint: min expected return (if specified)
     if "min_expected_return" in cons:
-        constraints.append(R.values @ w >= cons["min_expected_return"])
-
+        min_return = cons["min_expected_return"]
+        constraints_list.append({
+            'type': 'ineq',
+            'fun': lambda w: np.dot(R.values, w) - min_return
+        })
+    
+    # Constraint: max ESG risk score (if specified)
     if "max_esg_risk_score" in cons:
-        constraints.append(ESG_SCORES.values @ w <= cons["max_esg_risk_score"])
-
+        max_esg = cons["max_esg_risk_score"]
+        constraints_list.append({
+            'type': 'ineq',
+            'fun': lambda w: max_esg - np.dot(ESG_SCORES.values, w)
+        })
+    
+    # Bounds: 0 <= w <= max_single_asset_weight
+    max_weight = cons.get("max_single_asset_weight", 1.0)
+    bounds = [(0, max_weight) for _ in range(N)]
+    
+    # Objective function
     if objective_type == "minimize_volatility":
-        objective = cp.Minimize(variance)
+        def objective(w):
+            return np.dot(w, np.dot(SIGMA_NP, w))
     else:
+        # Maximize Sharpe-like: return - gamma * variance
         gamma = 0.5
-        objective = cp.Maximize(R.values @ w - gamma * variance)
-
-    return cp.Problem(objective, constraints), w
+        def objective(w):
+            portfolio_return = np.dot(R.values, w)
+            portfolio_variance = np.dot(w, np.dot(SIGMA_NP, w))
+            return -(portfolio_return - gamma * portfolio_variance)
+    
+    return objective, constraints_list, bounds
 
 # -------------------------------------------------------
 # Solve the optimization (Stage 5)
 # -------------------------------------------------------
-def solve_optimizer(problem, w):
-    problem.solve()
-    if w.value is None:
+def solve_optimizer(objective, constraints_list, bounds):
+    """Solve using scipy.optimize.minimize"""
+    # Initial guess: equal weights
+    x0 = np.ones(N) / N
+    
+    # Solve the optimization problem
+    result = minimize(
+        objective,
+        x0,
+        method='SLSQP',
+        bounds=bounds,
+        constraints=constraints_list,
+        options={'maxiter': 1000, 'ftol': 1e-9}
+    )
+    
+    if not result.success:
         return None
-
-    weights = pd.Series(w.value, index=TICKERS).round(4)
+    
+    weights = pd.Series(result.x, index=TICKERS).round(4)
     weights[weights < 1e-4] = 0
     if weights.sum() > 0:
         weights /= weights.sum()
 
     opt_return = float(weights.values @ R.values)
     opt_vol = float(np.sqrt(weights.values @ SIGMA_NP @ weights.values))
-    sharpe = (opt_return - 0.02) / opt_vol
+    sharpe = (opt_return - 0.02) / opt_vol if opt_vol > 0 else 0.0
 
     return {
         "optimal_weights": weights.to_dict(),
@@ -127,8 +161,11 @@ def solve_portfolio(data: InputData):
     if not cleaned:
         return {"status": "Error", "message": "LLM produced invalid JSON"}
 
-    problem, w = translate_strategy(cleaned)
-    result = solve_optimizer(problem, w)
+    objective, constraints_list, bounds = translate_strategy(cleaned)
+    result = solve_optimizer(objective, constraints_list, bounds)
+    
+    if result is None:
+        return {"status": "Error", "message": "Optimization failed - constraints may be infeasible"}
 
     return {
         "status": "Solved",
