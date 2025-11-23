@@ -1,0 +1,77 @@
+openapi: 3.0.0
+info:
+  title: Qfolio Solver
+  version: 1.0.0
+  description: Portfolio optimization API for Qfolio hackathon project
+
+paths:
+  /solve-portfolio:
+    post:
+      summary: Solve portfolio optimization
+      operationId: solvePortfolio
+      description: Takes user intent and asset data, uses LLM to generate strategy, and solves portfolio optimization problem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_intent
+              properties:
+                user_intent:
+                  type: string
+                  description: Natural language description of portfolio requirements
+                  example: "Generate a defensive portfolio with ESG < 18"
+                asset_data:
+                  type: string
+                  description: Optional asset data (currently using mocked data)
+                  default: ""
+      responses:
+        "200":
+          description: Portfolio optimization solved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "Solved"
+                  strategy_name:
+                    type: string
+                    example: "Defensive Core"
+                  llm_reasoning:
+                    type: string
+                    description: Reasoning trace from LLM
+                  optimal_weights:
+                    type: object
+                    additionalProperties:
+                      type: number
+                    example:
+                      AAPL: 0.25
+                      MSFT: 0.30
+                      NEE: 0.20
+                      GOOGL: 0.15
+                      TSLA: 0.10
+                  expected_return:
+                    type: number
+                    example: 0.18
+                  volatility:
+                    type: number
+                    example: 0.12
+                  sharpe_ratio:
+                    type: number
+                    example: 1.33
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: array
+                    items:
+                      type: object
+
