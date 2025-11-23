@@ -150,6 +150,21 @@ def solve_optimizer(objective, constraints_list, bounds):
     }
 
 # ------------------------
+# Root Endpoint
+# ------------------------
+@app.get("/")
+def root():
+    return {
+        "message": "Qfolio Portfolio Solver API",
+        "version": "1.0.0",
+        "endpoints": {
+            "solve_portfolio": "/solve-portfolio (POST)",
+            "docs": "/docs",
+            "openapi": "/openapi.json"
+        }
+    }
+
+# ------------------------
 # Main API Endpoint
 # ------------------------
 @app.post("/solve-portfolio")

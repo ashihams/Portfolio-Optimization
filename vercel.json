@@ -8,7 +8,7 @@
   ],
   "routes": [
     {
-      "src": "/solve-portfolio",
+      "src": "/(.*)",
       "dest": "api/solve.py"
     }
   ]
